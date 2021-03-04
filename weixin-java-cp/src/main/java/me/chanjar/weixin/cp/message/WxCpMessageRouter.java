@@ -53,7 +53,7 @@ public class WxCpMessageRouter {
   private static final int DEFAULT_THREAD_POOL_SIZE = 100;
   private final List<WxCpMessageRouterRule> rules = new ArrayList<>();
 
-  private final WxCpService wxCpService;
+  private WxCpService wxCpService;
 
   private ExecutorService executorService;
 
@@ -66,14 +66,21 @@ public class WxCpMessageRouter {
   /**
    * 构造方法.
    */
-  public WxCpMessageRouter(WxCpService wxCpService) {
-    this.wxCpService = wxCpService;
+  public WxCpMessageRouter() {
     ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("WxCpMessageRouter-pool-%d").build();
     this.executorService = new ThreadPoolExecutor(DEFAULT_THREAD_POOL_SIZE, DEFAULT_THREAD_POOL_SIZE,
       0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(), namedThreadFactory);
     this.messageDuplicateChecker = new WxMessageInMemoryDuplicateChecker();
-    this.sessionManager = wxCpService.getSessionManager();
     this.exceptionHandler = new LogExceptionHandler();
+  }
+
+  /**
+   * 构造方法.
+   */
+  public WxCpMessageRouter(WxCpService wxCpService) {
+    this();
+    this.wxCpService = wxCpService;
+    this.sessionManager = wxCpService.getSessionManager();
   }
 
   /**
@@ -128,9 +135,9 @@ public class WxCpMessageRouter {
   }
 
   /**
-   * 处理微信消息.
+   * 处理微信消息时指定WxCpService
    */
-  public WxCpXmlOutMessage route(final WxCpXmlMessage wxMessage, final Map<String, Object> context) {
+  public WxCpXmlOutMessage route(final WxCpService wxCpService, final WxCpXmlMessage wxMessage, final Map<String, Object> context) {
     if (isMsgDuplicated(wxMessage)) {
       // 如果是重复消息，那么就不做处理
       return null;
@@ -151,6 +158,7 @@ public class WxCpMessageRouter {
       return null;
     }
 
+    WxSessionManager wxSessionManager = this.sessionManager == null ? wxCpService.getSessionManager() : this.sessionManager;
     WxCpXmlOutMessage res = null;
     final List<Future> futures = new ArrayList<>();
     for (final WxCpMessageRouterRule rule : matchRules) {
@@ -158,11 +166,11 @@ public class WxCpMessageRouter {
       if (rule.isAsync()) {
         futures.add(
           this.executorService.submit(() -> {
-            rule.service(wxMessage, context, WxCpMessageRouter.this.wxCpService, WxCpMessageRouter.this.sessionManager, WxCpMessageRouter.this.exceptionHandler);
+            rule.service(wxMessage, context, wxCpService, wxSessionManager, WxCpMessageRouter.this.exceptionHandler);
           })
         );
       } else {
-        res = rule.service(wxMessage, context, this.wxCpService, this.sessionManager, this.exceptionHandler);
+        res = rule.service(wxMessage, context, wxCpService, wxSessionManager, this.exceptionHandler);
         // 在同步操作结束，session访问结束
         log.debug("End session access: async=false, sessionId={}", wxMessage.getFromUserName());
         sessionEndAccess(wxMessage);
@@ -187,6 +195,13 @@ public class WxCpMessageRouter {
       });
     }
     return res;
+  }
+
+  /**
+   * 处理消息
+   */
+  public WxCpXmlOutMessage route(final WxCpXmlMessage wxMessage, final Map<String, Object> context) {
+    return this.route(this.wxCpService, wxMessage, context);
   }
 
   /**
